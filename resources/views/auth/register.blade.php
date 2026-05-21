@@ -268,7 +268,7 @@
 
 <div class="register-wrapper">
     <div class="hero-panel">
-        <h1>Join SmartCart! 🚀</h1>
+        <h1>Join SmartCart!</h1>
         <p>Shop smarter, track your budget, and never exceed your spending limits.</p>
         <div class="feature-list">
             <div class="feature-item"><i class="fas fa-shopping-cart"></i><span>Smart Shopping Cart</span></div>
