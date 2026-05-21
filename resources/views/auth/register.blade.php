@@ -360,8 +360,7 @@
             <div class="input-group">
                 <label class="checkbox-flex">
                     <input type="checkbox" name="terms" id="termsCheckbox">
-                    <span>I agree to the <a href="#" style="color:#667eea;">Terms of Service</a> and <a href="#" style="color:#667eea;">Privacy Policy</a></span>
-                </label>
+                    <span>I agree to the <a href="{{ route('terms') }}" style="color:#667eea; text-decoration:underline;">Terms of Service</a> and <a href="{{ route('privacy') }}" style="color:#667eea; text-decoration:underline;">Privacy Policy</a></span>                </label>
                 <div class="error-text" id="error-terms"></div>
             </div>
 
@@ -604,8 +603,6 @@
             setTimeout(() => protectPasswordWrappers(), 10);
         });
     }
-    
-    console.log('Registration page ready - Eye toggle buttons are fixed (single eye, no duplication)');
 </script>
 </body>
 </html>

@@ -8,6 +8,7 @@ use App\Http\Controllers\GoogleLoginController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\AddressController;
 use App\Http\Controllers\Admin\AdminController;
+use App\Http\Controllers\PageController;
 use Illuminate\Support\Facades\Route;
 use App\Models\Cart;
 use App\Models\CartItem;
@@ -144,6 +145,10 @@ Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(fun
     Route::get('/orders/{order}', [AdminController::class, 'orderShow'])->name('orders.show');
     Route::post('/orders/{order}/update-status', [AdminController::class, 'orderUpdateStatus'])->name('orders.update-status');
 });
+
+// terms and privacy policy routes
+Route::get('/terms', [PageController::class, 'terms'])->name('terms');
+Route::get('/privacy', [PageController::class, 'privacy'])->name('privacy');
 
 // Auth routes (Breeze default - includes email verification routes)
 require __DIR__ . '/auth.php';
