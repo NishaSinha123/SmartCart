@@ -6,44 +6,26 @@
 @php
     $user = Auth::user();
     $budget = $user->budget;
+    $budgetAmount = $budget->amount ?? 0;
     
-    // ✅ Only count DELIVERED orders
-    $completedOrders = $user->orders()
-        ->where('order_status', 'delivered')
-        ->orderBy('created_at', 'desc')
-        ->take(10)
-        ->get();
+    // Data from controller
+    $completedOrders = $completedOrders ?? collect();
+    $totalSpent = $totalSpent ?? 0;
+    $averageSpent = $averageSpent ?? 0;
+    $monthlySpending = $monthlySpending ?? collect();
+    $commitment = $commitment ?? ['delivered' => 0, 'active_orders' => 0, 'cart_total' => 0];
     
-    $totalSpent = $completedOrders->sum('total_amount');
-    $averageSpent = $completedOrders->count() > 0 ? $totalSpent / $completedOrders->count() : 0;
-    
-    // Monthly spending trend (only delivered orders)
-    $monthlySpending = $user->orders()
-        ->where('order_status', 'delivered')
-        ->selectRaw('DATE_FORMAT(created_at, "%Y-%m") as month, SUM(total_amount) as total')
-        ->groupBy('month')
-        ->orderBy('month', 'desc')
-        ->take(6)
-        ->get();
-    
-    // Current month spending (only delivered)
-    $currentMonthSpent = $user->orders()
-        ->where('order_status', 'delivered')
-        ->whereMonth('created_at', now()->month)
-        ->whereYear('created_at', now()->year)
-        ->sum('total_amount');
-    
-    $cartTotal = $user->cart?->items->sum(fn($i) => $i->product->price * $i->quantity) ?? 0;
-    $totalCommitted = $currentMonthSpent + $cartTotal;
-    $remainingBudget = $budget ? max(0, $budget->amount - $totalCommitted) : 0;
+    $remainingBudget = max(0, $budgetAmount - $commitment['total_committed']);
+    $percentageUsed = $budgetAmount > 0 ? min(100, round(($commitment['total_committed'] / $budgetAmount) * 100)) : 0;
 @endphp
 
 <div class="bg-white rounded-xl p-6 shadow-sm mb-6">
     <h2 class="text-xl font-bold mb-4"><i class="fas fa-chart-pie"></i> Your Spending Insights</h2>
     
+    <!-- Stats cards -->
     <div class="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
         <div class="text-center p-4 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-xl">
-            <div class="text-2xl font-bold text-indigo-600">₹{{ number_format($budget->amount, 2) }}</div>
+            <div class="text-2xl font-bold text-indigo-600">₹{{ number_format($budgetAmount, 2) }}</div>
             <div class="text-sm text-gray-500">Monthly Budget</div>
         </div>
         <div class="text-center p-4 bg-gradient-to-r from-green-50 to-emerald-50 rounded-xl">
@@ -60,15 +42,18 @@
             <div class="text-sm text-gray-500">Completed Orders</div>
         </div>
         <div class="text-center p-4 bg-gradient-to-r from-purple-50 to-pink-50 rounded-xl">
-            <div class="text-2xl font-bold text-purple-600">₹{{ number_format($currentMonthSpent, 2) }}</div>
+            <div class="text-2xl font-bold text-purple-600">₹{{ number_format($commitment['delivered'], 2) }}</div>
             <div class="text-sm text-gray-500">This Month</div>
+            <div class="text-xs text-gray-400">Delivered only</div>
         </div>
     </div>
     
+    <!-- Spending trend chart -->
     <h3 class="font-bold mb-3">Monthly Spending Trend</h3>
     <canvas id="spendingChart" class="w-full h-64"></canvas>
 </div>
 
+<!-- Recent orders table -->
 <div class="bg-white rounded-xl p-6 shadow-sm">
     <h3 class="font-bold mb-3"><i class="fas fa-clock"></i> Recent Completed Orders</h3>
     @if($completedOrders->count() > 0)
@@ -96,18 +81,27 @@
         <p class="text-center text-gray-500 py-8">No completed orders yet. Start shopping to see insights!</p>
     @endif
     
+    <!-- Current month budget summary -->
     <div class="mt-6 pt-4 border-t">
         <div class="bg-gray-50 p-4 rounded-lg">
             <p class="font-semibold mb-2">Budget Summary for {{ now()->format('F Y') }}</p>
             <div class="grid grid-cols-2 gap-3 text-sm">
                 <div>Monthly Budget:</div>
-                <div class="font-semibold">₹{{ number_format($budget->amount, 2) }}</div>
+                <div class="font-semibold">₹{{ number_format($budgetAmount, 2) }}</div>
                 <div>Already Spent (Delivered):</div>
-                <div class="font-semibold text-orange-600">₹{{ number_format($currentMonthSpent, 2) }}</div>
+                <div class="font-semibold text-green-600">₹{{ number_format($commitment['delivered'], 2) }}</div>
+                <div>Pending Orders:</div>
+                <div class="font-semibold text-yellow-600">₹{{ number_format($commitment['active_orders'], 2) }}</div>
                 <div>Pending in Cart:</div>
-                <div class="font-semibold text-blue-600">₹{{ number_format($cartTotal, 2) }}</div>
+                <div class="font-semibold text-blue-600">₹{{ number_format($commitment['cart_total'], 2) }}</div>
+                <div>Total Committed:</div>
+                <div class="font-semibold text-purple-600">₹{{ number_format($commitment['total_committed'], 2) }}</div>
                 <div>Remaining:</div>
                 <div class="font-semibold text-green-600">₹{{ number_format($remainingBudget, 2) }}</div>
+                <div>Usage:</div>
+                <div class="font-semibold {{ $percentageUsed >= 100 ? 'text-red-600' : 'text-gray-600' }}">
+                    {{ $percentageUsed }}%
+                </div>
             </div>
         </div>
     </div>

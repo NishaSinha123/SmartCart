@@ -5,6 +5,7 @@ namespace App\Http\Controllers;
 use App\Models\Budget;
 use App\Models\Cart;
 use App\Models\CartItem;
+use App\Models\Order;
 use Illuminate\Http\Request;
 use Illuminate\Support\Facades\Auth;
 use Illuminate\Support\Facades\Mail;
@@ -13,44 +14,41 @@ use App\Mail\BudgetExceededMail;
 class BudgetController extends Controller
 {
     /**
-     * All budget methods require authentication
-     */
-    // public function __construct()
-    // {
-    //     $this->middleware('auth');
-    // }
-
-    /**
-     * DISPLAY BUDGET PAGE
-     * GET /budget
-     * 
-     * Shows budget settings and current status
+     * Show budget page with real-time status
+     * Includes delivered orders + active orders + cart total
      */
     public function index()
     {
         $user = Auth::user();
-        
-        // Get user's budget (or null if not set)
         $budget = Budget::where('user_id', $user->id)->first();
         
-        // Get current cart total
-        $cartTotal = $this->getCartTotal($user);
+        // Get complete budget breakdown
+        $commitment = Order::getTotalBudgetCommitment($user);
+        $deliveredSpent = $commitment['delivered'];
+        $activeOrders = $commitment['active_orders'];
+        $cartTotal = $commitment['cart_total'];
+        $totalCommitted = $commitment['total_committed'];
         
-        // Calculate budget status
-        $budgetStatus = $this->calculateBudgetStatus($budget, $cartTotal);
+        $budgetAmount = $budget?->amount ?? 0;
+        $remainingBudget = $budget ? max(0, $budgetAmount - $totalCommitted) : 0;
+        $percentageUsed = $budget && $budgetAmount > 0 
+            ? min(100, round(($totalCommitted / $budgetAmount) * 100)) 
+            : 0;
         
-        return view('budget.index', compact('budget', 'cartTotal', 'budgetStatus'));
+        // Determine alert level for UI
+        $alertLevel = $this->getAlertLevel($budget, $totalCommitted, $budgetAmount);
+        
+        return view('budget.index', compact(
+            'budget', 'deliveredSpent', 'activeOrders', 'cartTotal', 
+            'totalCommitted', 'remainingBudget', 'percentageUsed', 'alertLevel'
+        ));
     }
 
     /**
-     * SAVE OR UPDATE BUDGET
-     * POST /budget
-     * 
-     * @param Request $request - contains amount
+     * Save or update user's monthly budget
      */
     public function store(Request $request)
     {
-        // 1️. Validate the budget amount
         $request->validate([
             'amount' => 'required|numeric|min:0|max:9999999.99',
         ], [
@@ -62,61 +60,64 @@ class BudgetController extends Controller
 
         $user = Auth::user();
         
-        // 2️. Update or create budget
+        // Update or create budget
         $budget = Budget::updateOrCreate(
             ['user_id' => $user->id],
             ['amount' => $request->amount]
         );
         
-        // 3️. Check if cart total exceeds new budget
-        $cartTotal = $this->getCartTotal($user);
+        // Check current total commitment against new budget
+        $commitment = Order::getTotalBudgetCommitment($user);
+        $totalCommitted = $commitment['total_committed'];
         
-        if ($cartTotal > $request->amount) {
-            // Budget exceeded alert
-            session()->flash('warning', "⚠️ Your cart total (₹" . number_format($cartTotal) . 
-                            ") exceeds your new budget! Please review your cart.");
-            
-            // Send email notification with null check
-            $this->sendBudgetAlert($user, $cartTotal, $request->amount, 'exceeded');
-        } elseif ($cartTotal > ($request->amount * 0.7)) {
-            // Near budget limit warning
-            session()->flash('info', "📊 Note: Your cart total (₹" . number_format($cartTotal) . 
-                            ") is close to your budget limit.");
+        if ($totalCommitted > $request->amount) {
+            session()->flash('warning', "⚠️ Your total committed amount (₹" . number_format($totalCommitted) . 
+                            ") exceeds your new budget! This includes delivered orders, pending orders, and cart items.");
+            $this->sendBudgetAlert($user, $totalCommitted, $request->amount, 'exceeded');
+        } elseif ($totalCommitted > ($request->amount * 0.7)) {
+            session()->flash('info', "📊 Note: You've already committed ₹" . number_format($totalCommitted) . 
+                            " which is close to your budget limit.");
         }
         
-        return redirect()->route('budget.index')
-                        ->with('success', 'Budget updated successfully!');
+        return redirect()->route('budget.index')->with('success', 'Budget updated successfully!');
     }
 
     /**
-     * GET BUDGET STATUS (AJAX endpoint for real-time updates)
-     * GET /budget/status
+     * AJAX endpoint for real-time budget status updates
+     * Used by frontend to refresh data every 30 seconds
      */
     public function getStatus()
     {
         $user = Auth::user();
         $budget = Budget::where('user_id', $user->id)->first();
-        $cartTotal = $this->getCartTotal($user);
+        $commitment = Order::getTotalBudgetCommitment($user);
         
-        $status = $this->calculateBudgetStatus($budget, $cartTotal);
+        $budgetAmount = $budget?->amount ?? 0;
+        $totalCommitted = $commitment['total_committed'];
+        $remaining = $budget ? max(0, $budgetAmount - $totalCommitted) : 0;
+        $percentage = $budget && $budgetAmount > 0 
+            ? min(100, round(($totalCommitted / $budgetAmount) * 100)) 
+            : 0;
         
         return response()->json([
             'success' => true,
             'has_budget' => !is_null($budget),
-            'budget_amount' => $budget ? number_format($budget->amount, 2) : 0,
-            'cart_total' => number_format($cartTotal, 2),
-            'remaining' => $status['remaining'],
-            'percentage' => $status['percentage'],
-            'alert_level' => $status['alert_level'],
-            'alert_message' => $status['alert_message'],
-            'is_exceeded' => $status['is_exceeded']
+            'budget_amount' => number_format($budgetAmount, 2),
+            'delivered_spent' => number_format($commitment['delivered'], 2),
+            'active_orders' => number_format($commitment['active_orders'], 2),
+            'cart_total' => number_format($commitment['cart_total'], 2),
+            'total_committed' => number_format($totalCommitted, 2),
+            'remaining' => number_format($remaining, 2),
+            'percentage' => $percentage,
+            'alert_level' => $this->getAlertLevel($budget, $totalCommitted, $budgetAmount),
         ]);
     }
 
     /**
-     * CHECK BEFORE CHECKOUT (Called by checkout system)
+     * Check if adding an item would exceed budget
+     * Called by CartController before adding items
      */
-    public function checkCartAgainstBudget($cartTotal)
+    public function checkCartAgainstBudget($newCartTotal)
     {
         $user = Auth::user();
         $budget = Budget::where('user_id', $user->id)->first();
@@ -128,61 +129,65 @@ class BudgetController extends Controller
             ];
         }
         
-        if ($cartTotal > $budget->amount) {
+        // Include existing active orders in calculation
+        $activeOrders = Order::getMonthlyActiveOrdersAmount($user->id);
+        $totalCommitted = $activeOrders + $newCartTotal;
+        
+        if ($totalCommitted > $budget->amount) {
             return [
                 'allowed' => false,
-                'error' => "❌ Cannot add item! Your cart total would be ₹" . number_format($cartTotal) . 
-                        " which exceeds your budget (₹" . number_format($budget->amount) . 
-                        "). Please remove items or increase your budget."
+                'error' => "❌ Cannot add item! This would make your total committed amount ₹" . 
+                        number_format($totalCommitted) . " which exceeds your budget (₹" . 
+                        number_format($budget->amount) . "). You already have ₹" . 
+                        number_format($activeOrders) . " in pending orders."
             ];
         }
         
         return [
             'allowed' => true,
-            'remaining' => $budget->amount - $cartTotal
-        ];
-    }
-    
-    public function canCheckout()
-    {
-        $user = Auth::user();
-        $budget = Budget::where('user_id', $user->id)->first();
-        $cartTotal = $this->getCartTotal($user);
-        
-        if (!$budget) {
-            return [
-                'allowed' => true,
-                'warning' => "You haven't set a monthly budget. Consider setting one to track your spending!"
-            ];
-        }
-        
-        // Include monthly spent
-        $monthlySpent = $user->orders()
-            ->where('order_status', '!=', 'cancelled')
-            ->whereMonth('created_at', now()->month)
-            ->whereYear('created_at', now()->year)
-            ->sum('total_amount');
-        
-        $remainingBudget = $budget->amount - $monthlySpent;
-        
-        if ($cartTotal > $remainingBudget) {
-            return [
-                'allowed' => false,
-                'error' => "❌ Cannot checkout! Your cart total (₹" . number_format($cartTotal) . 
-                        ") exceeds your remaining budget (₹" . number_format($remainingBudget) . 
-                        "). You have already spent ₹" . number_format($monthlySpent) . " this month."
-            ];
-        }
-        
-        return [
-            'allowed' => true,
-            'info' => "✅ Within budget! Remaining: ₹" . number_format($remainingBudget - $cartTotal)
+            'remaining' => $budget->amount - $totalCommitted
         ];
     }
 
     /**
-     * GET BUDGET INSIGHTS (Analytics)
-     * GET /budget/insights
+     * Check if user can proceed to checkout
+     * Verifies budget considering delivered + active orders + cart
+     */
+    public function canCheckout()
+    {
+        $user = Auth::user();
+        $budget = Budget::where('user_id', $user->id)->first();
+        
+        if (!$budget) {
+            return [
+                'allowed' => true,
+                'warning' => "You haven't set a monthly budget. Consider setting one to track your spending!"
+            ];
+        }
+        
+        $commitment = Order::getTotalBudgetCommitment($user);
+        $totalCommitted = $commitment['total_committed'];
+        $remainingBudget = max(0, $budget->amount - $totalCommitted);
+        
+        if ($commitment['cart_total'] > $remainingBudget) {
+            return [
+                'allowed' => false,
+                'error' => "❌ Cannot checkout! Your cart total (₹" . number_format($commitment['cart_total']) . 
+                        ") would exceed your remaining budget (₹" . number_format($remainingBudget) . ").\n" .
+                        "Already spent: ₹" . number_format($commitment['delivered']) . " (delivered)\n" .
+                        "Pending orders: ₹" . number_format($commitment['active_orders'])
+            ];
+        }
+        
+        return [
+            'allowed' => true,
+            'info' => "✅ Within budget! Remaining: ₹" . number_format($remainingBudget - $commitment['cart_total'])
+        ];
+    }
+
+    /**
+     * Display budget insights and spending analytics
+     * Charts and historical data shown here
      */
     public function insights()
     {
@@ -191,31 +196,42 @@ class BudgetController extends Controller
         
         if (!$budget) {
             return redirect()->route('budget.index')
-                           ->with('info', 'Please set a budget first to see insights.');
+                ->with('info', 'Please set a budget first to see insights.');
         }
         
-        $orders = $user->orders()
-                      ->where('order_status', 'delivered')
-                      ->orderBy('created_at', 'desc')
-                      ->take(10)
-                      ->get();
+        // Completed orders for analytics
+        $completedOrders = $user->orders()
+            ->where('order_status', Order::STATUS_DELIVERED)
+            ->orderBy('created_at', 'desc')
+            ->take(10)
+            ->get();
         
-        $totalSpent = $orders->sum('total_amount');
-        $averageSpent = $orders->count() > 0 ? $totalSpent / $orders->count() : 0;
+        $totalSpent = $completedOrders->sum('total_amount');
+        $averageSpent = $completedOrders->count() > 0 ? $totalSpent / $completedOrders->count() : 0;
         
+        // Monthly trend for chart
         $monthlySpending = $user->orders()
-                               ->where('order_status', 'delivered')
-                               ->selectRaw('DATE_FORMAT(created_at, "%Y-%m") as month, SUM(total_amount) as total')
-                               ->groupBy('month')
-                               ->orderBy('month', 'desc')
-                               ->take(6)
-                               ->get();
+            ->where('order_status', Order::STATUS_DELIVERED)
+            ->selectRaw('DATE_FORMAT(created_at, "%Y-%m") as month, SUM(total_amount) as total')
+            ->groupBy('month')
+            ->orderBy('month', 'desc')
+            ->take(6)
+            ->get();
         
-        return view('budget.insights', compact('budget', 'orders', 'totalSpent', 'averageSpent', 'monthlySpending'));
+        // Current month breakdown
+        $commitment = Order::getTotalBudgetCommitment($user);
+        
+        return view('budget.insights', compact(
+            'budget', 'completedOrders', 'totalSpent', 'averageSpent', 
+            'monthlySpending', 'commitment'
+        ));
     }
 
-    // HELPER METHODS 
+    // ==================== PRIVATE HELPER METHODS ====================
 
+    /**
+     * Calculate current cart total for user
+     */
     private function getCartTotal($user)
     {
         $cart = Cart::where('user_id', $user->id)->first();
@@ -224,95 +240,86 @@ class BudgetController extends Controller
             return 0;
         }
         
-        $cartItems = CartItem::where('cart_id', $cart->id)
-                             ->with('product')
-                             ->get();
-        
-        $total = 0;
-        foreach ($cartItems as $item) {
-            $total += $item->product->price * $item->quantity;
-        }
-        
-        return $total;
+        return CartItem::where('cart_id', $cart->id)
+            ->with('product')
+            ->get()
+            ->sum(fn($item) => $item->product->price * $item->quantity);
     }
 
-    private function calculateBudgetStatus($budget, $cartTotal)
+    /**
+     * Determine alert level based on budget usage
+     * Used for UI color coding and warning messages
+     */
+    private function getAlertLevel($budget, $totalCommitted, $budgetAmount)
     {
-        if (!$budget || $budget->amount == 0) {
+        if (!$budget || $budgetAmount == 0) {
             return [
-                'has_budget' => false,
-                'percentage' => 0,
-                'remaining' => 'Not set',
-                'alert_level' => 'no_budget',
-                'alert_message' => 'No budget set. Click "Set Budget" to start tracking!',
-                'is_exceeded' => false,
-                'remaining_amount' => 0
+                'level' => 'no_budget',
+                'message' => 'No budget set. Click "Set Budget" to start tracking!',
+                'color' => 'gray'
             ];
         }
         
-        $budgetAmount = $budget->amount;
-        $percentage = ($cartTotal / $budgetAmount) * 100;
-        $percentage = min(100, $percentage);
-        $remaining = $budgetAmount - $cartTotal;
+        $percentage = ($totalCommitted / $budgetAmount) * 100;
         
-        if ($cartTotal > $budgetAmount) {
-            $alertLevel = 'exceeded';
-            $alertMessage = "🔴 BUDGET EXCEEDED! You've exceeded by ₹" . 
-                           number_format($cartTotal - $budgetAmount);
+        if ($totalCommitted >= $budgetAmount) {
+            return [
+                'level' => 'exceeded',
+                'message' => '🔴 BUDGET EXCEEDED! You have exceeded by ₹' . 
+                            number_format($totalCommitted - $budgetAmount),
+                'color' => 'red'
+            ];
         } elseif ($percentage >= 90) {
-            $alertLevel = 'critical';
-            $alertMessage = "🔴 CRITICAL! You've used " . number_format($percentage) . 
-                           "% of your budget. Only ₹" . number_format($remaining) . " left!";
+            return [
+                'level' => 'critical',
+                'message' => '🔴 CRITICAL! You have used ' . number_format($percentage, 1) . 
+                            '% of your budget. Only ₹' . number_format($budgetAmount - $totalCommitted) . ' left!',
+                'color' => 'red'
+            ];
         } elseif ($percentage >= 70) {
-            $alertLevel = 'warning';
-            $alertMessage = "🟡 WARNING! You've used " . number_format($percentage) . 
-                           "% of your budget. ₹" . number_format($remaining) . " remaining.";
+            return [
+                'level' => 'warning',
+                'message' => '🟡 WARNING! You have used ' . number_format($percentage, 1) . 
+                            '% of your budget.',
+                'color' => 'yellow'
+            ];
         } elseif ($percentage >= 50) {
-            $alertLevel = 'moderate';
-            $alertMessage = "🟠 You've used " . number_format($percentage) . 
-                           "% of your budget. ₹" . number_format($remaining) . " remaining.";
+            return [
+                'level' => 'moderate',
+                'message' => '🟠 You have used ' . number_format($percentage, 1) . '% of your budget.',
+                'color' => 'orange'
+            ];
         } elseif ($percentage > 0) {
-            $alertLevel = 'safe';
-            $alertMessage = "🟢 Good! You've used " . number_format($percentage) . 
-                           "% of your budget. ₹" . number_format($remaining) . " left.";
-        } else {
-            $alertLevel = 'empty';
-            $alertMessage = "🟢 Your cart is empty! Start shopping!";
+            return [
+                'level' => 'safe',
+                'message' => '🟢 Good! You have used ' . number_format($percentage, 1) . '% of your budget.',
+                'color' => 'green'
+            ];
         }
         
         return [
-            'has_budget' => true,
-            'budget_amount' => $budgetAmount,
-            'cart_total' => $cartTotal,
-            'percentage' => round($percentage, 1),
-            'remaining' => '₹' . number_format(max(0, $remaining)),
-            'remaining_amount' => max(0, $remaining),
-            'alert_level' => $alertLevel,
-            'alert_message' => $alertMessage,
-            'is_exceeded' => $cartTotal > $budgetAmount,
-            'exceeded_by' => $cartTotal > $budgetAmount ? $cartTotal - $budgetAmount : 0
+            'level' => 'empty',
+            'message' => '🟢 Your cart is empty! Start shopping!',
+            'color' => 'green'
         ];
     }
 
     /**
-     * Send email alert when budget is exceeded
-     * Added null check to prevent mail sending errors
+     * Send email notification when budget is exceeded
+     * Only sends in production environment to avoid spam during development
      */
-    private function sendBudgetAlert($user, $cartTotal, $budgetAmount, $type)
+    private function sendBudgetAlert($user, $totalCommitted, $budgetAmount, $type)
     {
-        // Log the alert
-        \Log::info("Budget {$type} for user {$user->id}: Cart ₹{$cartTotal} / Budget ₹{$budgetAmount}");
+        \Log::info("Budget {$type} for user {$user->id}: Committed ₹{$totalCommitted} / Budget ₹{$budgetAmount}");
         
-        // Only send email if user has email and mail is configured
         if ($user->email && app()->environment('production')) {
             try {
-                Mail::to($user->email)->send(new BudgetExceededMail($user, $cartTotal, $budgetAmount));
+                Mail::to($user->email)->send(new BudgetExceededMail($user, $totalCommitted, $budgetAmount));
                 \Log::info("Budget alert email sent to: {$user->email}");
             } catch (\Exception $e) {
                 \Log::error("Failed to send budget alert email: " . $e->getMessage());
             }
         } elseif ($user->email && !app()->environment('production')) {
-            // In development, log instead of sending
             \Log::info("Development mode: Would send budget alert email to {$user->email}");
         }
     }

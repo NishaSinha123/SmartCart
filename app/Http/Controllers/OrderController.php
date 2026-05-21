@@ -24,7 +24,7 @@ use Razorpay\Api\Api;
 class OrderController extends Controller
 {
     /**
-     * Display checkout page
+     * Display checkout page with budget validation
      */
     public function checkout()
     {
@@ -38,17 +38,18 @@ class OrderController extends Controller
         $cartItems = $cart->items()->with('product')->get();
         $total = $cartItems->sum(fn($item) => $item->product->price * $item->quantity);
         
+        // Stock validation
         foreach ($cartItems as $item) {
             if ($item->product->quantity < $item->quantity) {
                 return redirect()->route('cart.index')->with('error', "{$item->product->name} has only {$item->product->quantity} units in stock.");
             }
         }
         
+        // Budget validation - includes delivered + pending orders + cart total
         if ($user->budget) {
-            $monthlySpent = Order::getMonthlySpent($user->id);
-            $remainingBudget = $user->budget->amount - $monthlySpent;
-            if ($total > $remainingBudget) {
-                return redirect()->route('cart.index')->with('error', "Cart total exceeds your remaining monthly budget (₹" . number_format(max(0, $remainingBudget)) . ").");
+            $budgetCheck = $this->checkBudgetBeforeCheckout($user, $total);
+            if (!$budgetCheck['allowed']) {
+                return redirect()->route('cart.index')->with('error', $budgetCheck['error']);
             }
         }
         
@@ -70,6 +71,7 @@ class OrderController extends Controller
 
         $user = Auth::user();
         $cart = $user->cart;
+        
         if (!$cart || $cart->items->count() == 0) {
             return redirect()->route('cart.index')->with('error', 'Your cart is empty!');
         }
@@ -78,18 +80,37 @@ class OrderController extends Controller
         if ($address->user_id != $user->id) abort(403);
 
         DB::beginTransaction();
+        
         try {
             $cartItems = $cart->items()->with('product')->get();
             $total = 0;
+            
             foreach ($cartItems as $item) {
-                if ($item->product->quantity < $item->quantity) throw new \Exception("{$item->product->name} is out of stock!");
+                if ($item->product->quantity < $item->quantity) {
+                    throw new \Exception("{$item->product->name} is out of stock!");
+                }
                 $total += $item->product->price * $item->quantity;
             }
             
+            // Budget validation before placing order
             if ($user->budget) {
-                $monthlySpent = Order::getMonthlySpent($user->id);
-                if (($monthlySpent + $total) > $user->budget->amount) {
-                    throw new \Exception("This order would exceed your monthly budget!");
+                $deliveredSpent = Order::where('user_id', $user->id)
+                    ->where('order_status', Order::STATUS_DELIVERED)
+                    ->whereMonth('created_at', now()->month)
+                    ->whereYear('created_at', now()->year)
+                    ->sum('total_amount');
+                
+                $pendingOrders = Order::where('user_id', $user->id)
+                    ->whereIn('order_status', ['pending', 'confirmed', 'processing', 'shipped', 'out_for_delivery'])
+                    ->whereMonth('created_at', now()->month)
+                    ->whereYear('created_at', now()->year)
+                    ->sum('total_amount');
+                
+                $newTotalCommitment = $deliveredSpent + $pendingOrders + $total;
+                
+                if ($newTotalCommitment > $user->budget->amount) {
+                    throw new \Exception("This order would exceed your monthly budget! Your total committed amount would be ₹" . 
+                        number_format($newTotalCommitment) . " (Budget: ₹" . number_format($user->budget->amount) . ").");
                 }
             }
             
@@ -140,7 +161,9 @@ class OrderController extends Controller
             // Email to customer
             try {
                 Mail::to($user->email)->send(new OrderPlacedMail($order));
-            } catch (\Exception $e) { \Log::error("Order email failed: " . $e->getMessage()); }
+            } catch (\Exception $e) { 
+                \Log::error("Order email failed: " . $e->getMessage()); 
+            }
             
             // Email to sellers
             try {
@@ -154,9 +177,11 @@ class OrderController extends Controller
                 foreach ($sellerEmails as $sellerEmail) {
                     Mail::to($sellerEmail)->send(new NewOrderForSellerMail($order));
                 }
-            } catch (\Exception $e) { \Log::error("Seller email failed: " . $e->getMessage()); }
+            } catch (\Exception $e) { 
+                \Log::error("Seller email failed: " . $e->getMessage()); 
+            }
             
-            // Razorpay flow
+            // Payment flow
             if ($request->payment_method == 'razorpay') {
                 $api = new Api(env('RAZORPAY_KEY'), env('RAZORPAY_SECRET'));
                 $razorpayOrder = $api->order->create([
@@ -179,6 +204,57 @@ class OrderController extends Controller
             DB::rollback();
             return back()->with('error', $e->getMessage());
         }
+    }
+
+    /**
+     * Check budget before showing checkout page
+     * Includes delivered orders + pending orders + cart total
+     */
+    private function checkBudgetBeforeCheckout($user, $cartTotal)
+    {
+        $budget = $user->budget;
+        
+        if (!$budget) {
+            return [
+                'allowed' => true,
+                'warning' => "You haven't set a monthly budget. Consider setting one to track your spending!"
+            ];
+        }
+        
+        $deliveredSpent = Order::where('user_id', $user->id)
+            ->where('order_status', Order::STATUS_DELIVERED)
+            ->whereMonth('created_at', now()->month)
+            ->whereYear('created_at', now()->year)
+            ->sum('total_amount');
+        
+        $pendingOrders = Order::where('user_id', $user->id)
+            ->whereIn('order_status', ['pending', 'confirmed', 'processing', 'shipped', 'out_for_delivery'])
+            ->whereMonth('created_at', now()->month)
+            ->whereYear('created_at', now()->year)
+            ->sum('total_amount');
+        
+        $totalCommitment = $deliveredSpent + $pendingOrders + $cartTotal;
+        $remainingBudget = $budget->amount - $totalCommitment;
+        
+        if ($cartTotal > $remainingBudget + $cartTotal) {
+            // This condition is for when cart alone exceeds remaining
+        }
+        
+        if ($totalCommitment > $budget->amount) {
+            return [
+                'allowed' => false,
+                'error' => "❌ Cannot checkout! Your total committed amount (₹" . number_format($totalCommitment) . 
+                        ") exceeds your monthly budget (₹" . number_format($budget->amount) . ").\n" .
+                        "Already spent: ₹" . number_format($deliveredSpent) . " (delivered)\n" .
+                        "Pending orders: ₹" . number_format($pendingOrders)
+            ];
+        }
+        
+        return [
+            'allowed' => true,
+            'remaining' => $budget->amount - $totalCommitment,
+            'info' => "✅ Within budget! Remaining: ₹" . number_format($remainingBudget)
+        ];
     }
 
     /**
@@ -297,7 +373,7 @@ class OrderController extends Controller
             'return_reason' => $request->return_reason,
             'return_requested_at' => now()
         ]);
-        // Email to seller
+        
         try {
             $sellerEmails = [];
             foreach ($order->items as $item) {
@@ -309,7 +385,10 @@ class OrderController extends Controller
             foreach ($sellerEmails as $sellerEmail) {
                 Mail::to($sellerEmail)->send(new ReturnRequestedMail($order));
             }
-        } catch (\Exception $e) { \Log::error("Return request email failed: " . $e->getMessage()); }
+        } catch (\Exception $e) { 
+            \Log::error("Return request email failed: " . $e->getMessage()); 
+        }
+        
         return redirect()->route('orders.show', $order)->with('success', 'Return request submitted.');
     }
 
@@ -320,6 +399,7 @@ class OrderController extends Controller
     {
         if (!Auth::user()->isSeller() && !Auth::user()->isAdmin()) abort(403);
         if (!$order->canProcessReturn()) return back()->with('error', 'Cannot process return.');
+        
         DB::beginTransaction();
         try {
             foreach ($order->items as $item) $item->product->increment('quantity', $item->quantity);
@@ -360,6 +440,7 @@ class OrderController extends Controller
     {
         if (!Auth::user()->isSeller() && !Auth::user()->isAdmin()) abort(403);
         if ($order->order_status != Order::STATUS_RETURN_APPROVED) return back()->with('error', 'Refund not allowed.');
+        
         DB::beginTransaction();
         try {
             foreach ($order->items as $item) {
@@ -418,7 +499,7 @@ class OrderController extends Controller
             'transaction_id' => $request->transaction_id,
             'payment_status' => Order::PAYMENT_SUBMITTED,
             'payment_screenshot' => $path,
-            'order_status' => Order::STATUS_CONFIRMED   // Auto confirm on proof upload
+            'order_status' => Order::STATUS_CONFIRMED
         ]);
 
         return redirect()->route('orders.show', $order)->with('success', 'Payment proof submitted. Order confirmed.');

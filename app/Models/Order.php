@@ -30,10 +30,9 @@ class Order extends Model
         'shipping_phone',
         'shipping_address_text',
         'payment_screenshot',
-        'razorpay_order_id',    // add
-    'razorpay_payment_id',  // add
-    'razorpay_signature',   // add
-
+        'razorpay_order_id',
+        'razorpay_payment_id',
+        'razorpay_signature',
     ];
 
     protected $casts = [
@@ -68,6 +67,11 @@ class Order extends Model
     const REFUND_PROCESSING = 'processing';
     const REFUND_COMPLETED = 'completed';
     const REFUND_FAILED = 'failed';
+
+    // Order statuses that are considered "active" (money committed, not yet delivered)
+    const ACTIVE_STATUSES = [
+        'pending', 'confirmed', 'processing', 'shipped', 'out_for_delivery'
+    ];
 
     // Relationships
     public function user()
@@ -149,8 +153,11 @@ class Order extends Model
         };
     }
 
-    // Get monthly spent (only delivered orders)
-    public static function getMonthlySpent($userId)
+    /**
+     * Get total amount of delivered orders for current month
+     * These are fully completed transactions where money is actually spent
+     */
+    public static function getMonthlyDeliveredSpent($userId)
     {
         return self::where('user_id', $userId)
             ->where('order_status', self::STATUS_DELIVERED)
@@ -159,11 +166,47 @@ class Order extends Model
             ->sum('total_amount');
     }
 
-    // Get total committed (monthly spent + cart total)
-    public static function getTotalCommitted($user)
+    /**
+     * Get total amount of active orders (pending, confirmed, processing, shipped)
+     * These are orders where money is committed but not yet delivered
+     */
+    public static function getMonthlyActiveOrdersAmount($userId)
     {
-        $monthlySpent = self::getMonthlySpent($user->id);
+        return self::where('user_id', $userId)
+            ->whereIn('order_status', self::ACTIVE_STATUSES)
+            ->whereMonth('created_at', now()->month)
+            ->whereYear('created_at', now()->year)
+            ->sum('total_amount');
+    }
+
+    /**
+     * Get total amount of cancelled orders for current month
+     * These don't affect budget since money is returned
+     */
+    public static function getMonthlyCancelledAmount($userId)
+    {
+        return self::where('user_id', $userId)
+            ->where('order_status', self::STATUS_CANCELLED)
+            ->whereMonth('created_at', now()->month)
+            ->whereYear('created_at', now()->year)
+            ->sum('total_amount');
+    }
+
+    /**
+     * Calculate total budget commitment = delivered + active orders + cart
+     * This gives accurate picture of all money that is or will be spent
+     */
+    public static function getTotalBudgetCommitment($user)
+    {
+        $deliveredSpent = self::getMonthlyDeliveredSpent($user->id);
+        $activeOrders = self::getMonthlyActiveOrdersAmount($user->id);
         $cartTotal = $user->cart?->items->sum(fn($i) => $i->product->price * $i->quantity) ?? 0;
-        return $monthlySpent + $cartTotal;
+        
+        return [
+            'delivered' => $deliveredSpent,
+            'active_orders' => $activeOrders,
+            'cart_total' => $cartTotal,
+            'total_committed' => $deliveredSpent + $activeOrders + $cartTotal
+        ];
     }
 }

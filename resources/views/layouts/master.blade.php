@@ -183,30 +183,34 @@
             @if(!Auth::user()->isSeller() && !Auth::user()->isAdmin())
                 @php 
                     $budget = Auth::user()->budget;
-                    $monthlySpent = Auth::user()->orders()
-                        ->where('order_status', 'delivered')
+                    $deliveredSpent = \App\Models\Order::where('user_id', Auth::id())
+                        ->where('order_status', \App\Models\Order::STATUS_DELIVERED)
+                        ->whereMonth('created_at', now()->month)
+                        ->whereYear('created_at', now()->year)
+                        ->sum('total_amount');
+                    $pendingOrders = \App\Models\Order::where('user_id', Auth::id())
+                        ->whereIn('order_status', ['pending', 'confirmed', 'processing', 'shipped', 'out_for_delivery'])
                         ->whereMonth('created_at', now()->month)
                         ->whereYear('created_at', now()->year)
                         ->sum('total_amount');
                     $cartTotal = Auth::user()->cart?->items->sum(fn($i) => $i->product->price * $i->quantity) ?? 0;
-                    $totalCommitted = $monthlySpent + $cartTotal;
+                    $totalCommitted = $deliveredSpent + $pendingOrders + $cartTotal;
                     $remainingBudget = $budget ? max(0, $budget->amount - $totalCommitted) : 0;
                     $percentageUsed = $budget && $budget->amount > 0 ? min(100, round(($totalCommitted / $budget->amount) * 100)) : 0;
                 @endphp
-                @if($budget)
+                
+                @if($budget && $budget->amount > 0)
                 <div class="budget-sidebar">
                     <div style="font-size: 0.7rem; opacity: 0.8;">Monthly Budget</div>
                     <div style="font-size: 1.2rem; font-weight: bold;">₹{{ number_format($budget->amount) }}</div>
-                    <div style="font-size: 0.6rem; margin-top: 3px;">
-                        <span>Spent: ₹{{ number_format($monthlySpent) }}</span>
-                        @if($cartTotal > 0)
-                            <span class="ml-2">Cart: ₹{{ number_format($cartTotal) }}</span>
-                        @endif
+                    <div style="font-size: 0.6rem; margin-top: 5px;">
+                        <div>✅ Delivered: ₹{{ number_format($deliveredSpent) }}</div>
+                        @if($pendingOrders > 0)<div class="mt-1">⏳ Pending: ₹{{ number_format($pendingOrders) }}</div>@endif
+                        @if($cartTotal > 0)<div class="mt-1">🛒 Cart: ₹{{ number_format($cartTotal) }}</div>@endif
+                        <div class="mt-1 font-semibold">💰 Committed: ₹{{ number_format($totalCommitted) }}</div>
                     </div>
-                    <div style="font-size: 0.7rem; margin-top: 3px;">
-                        Remaining: <strong>₹{{ number_format($remainingBudget) }}</strong>
-                    </div>
-                    <div style="height: 4px; background: rgba(255,255,255,0.3); border-radius: 2px; margin-top: 8px;">
+                    <div style="font-size: 0.7rem; margin-top: 5px;">Remaining: <strong>₹{{ number_format($remainingBudget) }}</strong></div>
+                    <div style="height: 4px; background: rgba(255,255,255,0.3); border-radius: 2px; margin-top: 6px;">
                         <div style="width: {{ $percentageUsed }}%; height: 4px; background: {{ $percentageUsed >= 100 ? '#ef4444' : ($percentageUsed >= 70 ? '#f59e0b' : '#10b981') }}; border-radius: 2px;"></div>
                     </div>
                 </div>

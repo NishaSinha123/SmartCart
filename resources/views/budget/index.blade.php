@@ -6,18 +6,10 @@
 @php
     $user = Auth::user();
     $budget = $user->budget;
+    $budgetAmount = $budget?->amount ?? 0;
     
-    // Only count DELIVERED orders for monthly spent
-    $monthlySpent = $user->orders()
-        ->where('order_status', 'delivered')
-        ->whereMonth('created_at', now()->month)
-        ->whereYear('created_at', now()->year)
-        ->sum('total_amount');
-    
-    $cartTotal = $user->cart?->items->sum(fn($i) => $i->product->price * $i->quantity) ?? 0;
-    $totalCommitted = $monthlySpent + $cartTotal;
-    $remainingBudget = $budget ? max(0, $budget->amount - $totalCommitted) : 0;
-    $percentageUsed = $budget && $budget->amount > 0 ? min(100, round(($totalCommitted / $budget->amount) * 100)) : 0;
+    // Get accurate breakdown from controller
+    // These variables come from controller now
 @endphp
 
 <div class="bg-gradient-to-r from-indigo-600 to-purple-600 rounded-xl p-6 text-white mb-6">
@@ -34,26 +26,31 @@
 <div class="bg-white rounded-xl p-6 shadow-sm mb-6">
     <h3 class="text-lg font-bold mb-4"><i class="fas fa-chart-simple"></i> Real-time Budget Status</h3>
     
-    <div class="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-6">
-        <div class="bg-gray-50 rounded-xl p-4 text-center">
-            <p class="text-gray-500 text-sm">Monthly Spent</p>
-            <p class="text-2xl font-bold text-orange-600">₹{{ number_format($monthlySpent, 2) }}</p>
-            <p class="text-xs text-gray-400">From delivered orders</p>
+    <!-- Four-column breakdown for better visibility -->
+    <div class="grid grid-cols-1 sm:grid-cols-4 gap-4 mb-6">
+        <div class="bg-green-50 rounded-xl p-4 text-center">
+            <p class="text-gray-500 text-sm">✅ Delivered</p>
+            <p class="text-2xl font-bold text-green-600">₹{{ number_format($deliveredSpent, 2) }}</p>
+            <p class="text-xs text-gray-400">Already spent</p>
         </div>
-        <div class="bg-gray-50 rounded-xl p-4 text-center">
-            <p class="text-gray-500 text-sm">Cart Total</p>
+        <div class="bg-yellow-50 rounded-xl p-4 text-center">
+            <p class="text-gray-500 text-sm">⏳ Pending Orders</p>
+            <p class="text-2xl font-bold text-yellow-600">₹{{ number_format($activeOrders, 2) }}</p>
+            <p class="text-xs text-gray-400">Being processed</p>
+        </div>
+        <div class="bg-blue-50 rounded-xl p-4 text-center">
+            <p class="text-gray-500 text-sm">🛒 In Cart</p>
             <p class="text-2xl font-bold text-blue-600" id="cartTotal">₹{{ number_format($cartTotal, 2) }}</p>
-            <p class="text-xs text-gray-400">Pending in cart</p>
+            <p class="text-xs text-gray-400">Not yet ordered</p>
         </div>
-        <div class="bg-gray-50 rounded-xl p-4 text-center">
-            <p class="text-gray-500 text-sm">Remaining</p>
-            <p class="text-2xl font-bold text-green-600" id="remainingAmount">
-                ₹{{ number_format($remainingBudget, 2) }}
-            </p>
-            <p class="text-xs text-gray-400">Available to spend</p>
+        <div class="bg-purple-50 rounded-xl p-4 text-center">
+            <p class="text-gray-500 text-sm">💰 Total Committed</p>
+            <p class="text-2xl font-bold text-purple-600">₹{{ number_format($totalCommitted, 2) }}</p>
+            <p class="text-xs text-gray-400">Delivered + Pending + Cart</p>
         </div>
     </div>
     
+    <!-- Progress bar -->
     <div class="mb-4">
         <div class="flex justify-between text-sm mb-1">
             <span>Budget Usage</span>
@@ -67,16 +64,21 @@
         </div>
     </div>
     
-    <div class="text-sm text-gray-600 mb-4">
-        <p><strong>Total Committed:</strong> ₹{{ number_format($totalCommitted) }} / ₹{{ number_format($budget?->amount ?? 0) }}</p>
-        @if($monthlySpent > 0)
-            <p class="text-green-600 mt-1">✅ Already spent: ₹{{ number_format($monthlySpent) }} on delivered orders</p>
+    <!-- Detailed breakdown -->
+    <div class="text-sm text-gray-600 mb-4 space-y-1">
+        <p><strong>Total Committed:</strong> ₹{{ number_format($totalCommitted) }} / ₹{{ number_format($budgetAmount) }}</p>
+        @if($deliveredSpent > 0)
+            <p class="text-green-600">✅ Already spent: ₹{{ number_format($deliveredSpent) }} (delivered orders)</p>
+        @endif
+        @if($activeOrders > 0)
+            <p class="text-yellow-600">⏳ Pending orders: ₹{{ number_format($activeOrders) }} (being processed)</p>
         @endif
         @if($cartTotal > 0)
-            <p class="text-orange-500 mt-1">⏳ Pending in cart: ₹{{ number_format($cartTotal) }}</p>
+            <p class="text-blue-600">🛒 In cart: ₹{{ number_format($cartTotal) }} (not yet ordered)</p>
         @endif
     </div>
     
+    <!-- Alert messages based on budget status -->
     @if($budget && $totalCommitted > $budget->amount)
         <div class="p-4 rounded-lg bg-red-100 text-red-700 mb-4">
             <i class="fas fa-exclamation-triangle"></i>
@@ -94,6 +96,7 @@
         </div>
     @endif
     
+    <!-- Action buttons -->
     <div class="flex gap-3">
         <a href="{{ route('cart.index') }}" class="bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300 transition">
             <i class="fas fa-shopping-cart"></i> View Cart
@@ -104,6 +107,7 @@
     </div>
 </div>
 
+<!-- Set/Update Budget Form -->
 <div class="bg-white rounded-xl p-6 shadow-sm">
     <h3 class="text-lg font-bold mb-4">
         <i class="fas fa-pen"></i> {{ $budget ? 'Update Your Budget' : 'Set Your Monthly Budget' }}
@@ -125,17 +129,20 @@
 
 @push('scripts')
 <script>
+    // Refresh budget status every 30 seconds for real-time updates
     function updateBudgetStatus() {
         fetch('{{ route("budget.status") }}')
             .then(response => response.json())
             .then(data => {
                 if (data.success) {
                     document.getElementById('cartTotal').innerHTML = '₹' + data.cart_total;
-                    document.getElementById('remainingAmount').innerHTML = '₹' + data.remaining;
+                    // Optionally update other elements
+                    console.log('Budget status updated:', data.percentage + '% used');
                 }
             })
-            .catch(error => console.error('Error:', error));
+            .catch(error => console.error('Budget status update failed:', error));
     }
+    // Update every 30 seconds
     setInterval(updateBudgetStatus, 30000);
 </script>
 @endpush
