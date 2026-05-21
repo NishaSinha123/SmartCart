@@ -35,6 +35,11 @@ Route::get('/dashboard', function () {
         return view('seller.dashboard');
     }
     
+    // For normal users, check email verification
+    if (!$user->hasVerifiedEmail()) {
+        return redirect()->route('verification.notice');
+    }
+    
     // User Dashboard Data
     $cart = Cart::where('user_id', $user->id)->first();
     $cartItems = [];
@@ -59,17 +64,12 @@ Route::get('/dashboard', function () {
     return view('dashboard', compact('cartItems', 'cartTotal', 'cartItemCount', 'budget', 'budgetAmount', 'budgetRemaining', 'budgetPercentage', 'ordersCount', 'recentOrders'));
 })->middleware(['auth'])->name('dashboard');
 
-// Email verification notice route
-Route::get('/email/verify', function () {
-    return view('auth.verify-email');
-})->middleware('auth')->name('verification.notice');
-
 // Google Login Routes
 Route::get('login/google', [GoogleLoginController::class, 'redirectToGoogle'])->name('login.google');
 Route::get('auth/google/callback', [GoogleLoginController::class, 'handleGoogleCallback'])->name('login.google.callback');
 
-// Profile Routes (auth required)
-Route::middleware('auth')->group(function () {
+// Profile Routes
+Route::middleware(['auth'])->group(function () {
     Route::get('/profile', [ProfileController::class, 'edit'])->name('profile.edit');
     Route::patch('/profile', [ProfileController::class, 'update'])->name('profile.update');
     Route::delete('/profile', [ProfileController::class, 'destroy'])->name('profile.destroy');
@@ -99,7 +99,7 @@ Route::middleware(['auth'])->prefix('budget')->group(function () {
 Route::resource('addresses', AddressController::class)->middleware(['auth']);
 Route::post('/addresses/{address}/set-default', [AddressController::class, 'setDefault'])->name('addresses.set-default')->middleware(['auth']);
 
-// Order Routes (all auth required)
+// Order Routes
 Route::middleware(['auth'])->prefix('orders')->group(function () {
     Route::get('/', [OrderController::class, 'index'])->name('orders.index');
     Route::get('/checkout', [OrderController::class, 'checkout'])->name('orders.checkout');
@@ -111,7 +111,7 @@ Route::middleware(['auth'])->prefix('orders')->group(function () {
     Route::get('/{order}/payment', [OrderController::class, 'payment'])->name('orders.payment');
     Route::post('/{order}/payment-proof', [OrderController::class, 'uploadPaymentProof'])->name('orders.payment-proof');
     
-    // Razorpay payment verification (must be inside auth and correct prefix)
+    // Razorpay payment verification
     Route::post('/payment/verify', [OrderController::class, 'verifyPayment'])->name('orders.payment.verify');
 });
 
@@ -145,5 +145,5 @@ Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(fun
     Route::post('/orders/{order}/update-status', [AdminController::class, 'orderUpdateStatus'])->name('orders.update-status');
 });
 
-// Auth routes (Breeze default)
+// Auth routes (Breeze default - includes email verification routes)
 require __DIR__ . '/auth.php';

@@ -1,5 +1,4 @@
 <?php
-// app/Http/Controllers/Auth/AuthenticatedSessionController.php
 
 namespace App\Http\Controllers\Auth;
 
@@ -20,17 +19,18 @@ class AuthenticatedSessionController extends Controller
     public function store(LoginRequest $request): RedirectResponse
     {
         $request->authenticate();
-
         $request->session()->regenerate();
 
-        // Check if email is verified
-        if (!$request->user()->hasVerifiedEmail()) {
-            return redirect()->route('verification.notice');
+        $user = $request->user();
+
+        // SKIP verification check for ADMIN 
+        if (!$user->isAdmin() && !$user->hasVerifiedEmail()) {
+            Auth::logout();
+            return redirect()->route('login')
+                ->with('error', 'Please verify your email address first. Check your inbox for the verification link.');
         }
 
-        // Role-based redirect
-        $user = $request->user();
-        
+        // Redirect based on role
         if ($user->isAdmin()) {
             return redirect()->intended(route('admin.dashboard'));
         } elseif ($user->isSeller()) {
@@ -43,10 +43,8 @@ class AuthenticatedSessionController extends Controller
     public function destroy(Request $request): RedirectResponse
     {
         Auth::guard('web')->logout();
-
         $request->session()->invalidate();
         $request->session()->regenerateToken();
-
         return redirect('/');
     }
 }

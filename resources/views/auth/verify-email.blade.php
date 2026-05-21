@@ -111,51 +111,67 @@
     </style>
 </head>
 <body>
-    <div class="verify-container">
-        <div class="logo">
-            <h2>🛒 SmartCart</h2>
-        </div>
-        
-        <div class="verify-icon">
-            📧
-        </div>
-        
-        <h2>Verify Your Email Address</h2>
-        
-        <p>Thanks for signing up! Before getting started, could you verify your email address by clicking on the link we just emailed to you?</p>
-        
-        @if (session('status') == 'verification-link-sent')
-            <div class="alert-success">
-                <i class="fas fa-check-circle"></i> A new verification link has been sent to your email address.
-            </div>
-        @endif
-        
-        <form method="POST" action="{{ route('verification.send') }}">
-            @csrf
-            <button type="submit" class="btn-primary">
-                <i class="fas fa-envelope"></i> Resend Verification Email
-            </button>
-        </form>
-        
-        <form method="POST" action="{{ route('logout') }}">
-            @csrf
-            <button type="submit" class="btn-secondary">
-                <i class="fas fa-sign-out-alt"></i> Log Out
-            </button>
-        </form>
-        
-        <div class="footer-links">
-            <a href="{{ url('/') }}">
-                <i class="fas fa-home"></i> Home
-            </a>
-            <a href="{{ route('login') }}">
-                <i class="fas fa-sign-in-alt"></i> Login
-            </a>
-        </div>
-        
-        <p style="margin-top: 20px; font-size: 0.7rem; color: #9ca3af;">
-            Didn't receive email? Check your spam folder.
-        </p>
+
+@auth
+    {{-- Auto redirect for users who are already verified --}}
+    @if(Auth::user()->hasVerifiedEmail())
+        <script>
+            @if(Auth::user()->isAdmin())
+                window.location.href = "{{ route('admin.dashboard') }}";
+            @elseif(Auth::user()->isSeller())
+                window.location.href = "{{ route('seller.dashboard') }}";
+            @else
+                window.location.href = "{{ route('dashboard') }}";
+            @endif
+        </script>
+    @endif
+@endauth
+
+<div class="verify-container">
+    <div class="logo">
+        <h2>🛒 SmartCart</h2>
     </div>
+    
+    <div class="verify-icon">
+        📧
+    </div>
+    
+    <h2>Verify Your Email Address</h2>
+    
+    <p>Thanks for signing up! Before getting started, could you verify your email address by clicking on the link we just emailed to you?</p>
+    
+    @if (session('status') == 'verification-link-sent')
+        <div class="alert-success">
+            <i class="fas fa-check-circle"></i> A new verification link has been sent to your email address.
+        </div>
+    @endif
+    
+    <form method="POST" action="{{ route('verification.send') }}">
+        @csrf
+        <button type="submit" class="btn-primary">
+            <i class="fas fa-envelope"></i> Resend Verification Email
+        </button>
+    </form>
+    
+    <form method="POST" action="{{ route('logout') }}">
+        @csrf
+        <button type="submit" class="btn-secondary">
+            <i class="fas fa-sign-out-alt"></i> Log Out
+        </button>
+    </form>
+    
+    <div class="footer-links">
+        <a href="{{ url('/') }}">
+            <i class="fas fa-home"></i> Home
+        </a>
+        <a href="{{ route('login') }}">
+            <i class="fas fa-sign-in-alt"></i> Login
+        </a>
+    </div>
+    
+    <p style="margin-top: 20px; font-size: 0.7rem; color: #9ca3af;">
+        Didn't receive email? Check your spam folder.
+    </p>
+</div>
 </body>
 </html>

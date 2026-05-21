@@ -1,5 +1,4 @@
 <?php
-// app/Http/Controllers/Auth/RegisteredUserController.php
 
 namespace App\Http\Controllers\Auth;
 
@@ -37,35 +36,33 @@ class RegisteredUserController extends Controller
             'terms.required' => 'You must agree to the terms and conditions.',
         ]);
 
+        // ADMIN automatically verified, others need verification
+        $isAdmin = $request->role === 'admin';
+        
         $user = User::create([
             'name' => $request->name,
             'email' => $request->email,
             'role' => $request->role,
             'password' => Hash::make($request->password),
+            'email_verified_at' => $isAdmin ? now() : null,  // Admin automatically verified
         ]);
 
-        // Create cart for the user
-        Cart::create([
-            'user_id' => $user->id
-        ]);
+        Cart::create(['user_id' => $user->id]);
+        Budget::create(['user_id' => $user->id, 'amount' => 0]);
 
-        // Create budget for the user with default 0
-        Budget::create([
-            'user_id' => $user->id,
-            'amount' => 0
-        ]);
-
-        event(new Registered($user));
+        // Send verification email ONLY for non-admin users 
+        if (!$isAdmin) {
+            event(new Registered($user));
+        }
 
         Auth::login($user);
 
-        // Redirect based on role
-        if ($user->isAdmin()) {
+        // Redirect appropriately
+        if ($isAdmin) {
             return redirect()->route('admin.dashboard');
-        } elseif ($user->isSeller()) {
-            return redirect()->route('seller.dashboard');
         }
-
-        return redirect()->route('dashboard');
+        
+        // For non-admin users, go to verification page
+        return redirect()->route('verification.notice');
     }
 }
