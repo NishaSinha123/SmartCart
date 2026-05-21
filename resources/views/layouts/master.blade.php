@@ -96,17 +96,40 @@
     
     <div class="dashboard-container">
         <aside class="sidebar">
-            <a href="{{ route('dashboard') }}" class="sidebar-logo">🛒 SmartCart</a>
+            <a href="{{ Auth::user()->isAdmin() ? route('admin.dashboard') : (Auth::user()->isSeller() ? route('seller.dashboard') : route('dashboard')) }}" class="sidebar-logo">
+                🛒 SmartCart
+            </a>
             
             <nav class="sidebar-nav">
-                @if(Auth::user()->isSeller())
+                {{-- ADMIN MENU --}}
+                @if(Auth::user()->isAdmin())
+                    <a href="{{ route('admin.dashboard') }}" class="{{ request()->routeIs('admin.dashboard') ? 'active' : '' }}">
+                        <i class="fas fa-tachometer-alt"></i> Dashboard
+                    </a>
+                    <a href="{{ route('admin.users') }}" class="{{ request()->routeIs('admin.users*') ? 'active' : '' }}">
+                        <i class="fas fa-users"></i> Manage Users
+                    </a>
+                    <a href="{{ route('admin.sellers') }}" class="{{ request()->routeIs('admin.sellers*') ? 'active' : '' }}">
+                        <i class="fas fa-store"></i> Manage Sellers
+                    </a>
+                    <a href="{{ route('admin.products') }}" class="{{ request()->routeIs('admin.products*') ? 'active' : '' }}">
+                        <i class="fas fa-box"></i> All Products
+                    </a>
+                    <a href="{{ route('admin.orders') }}" class="{{ request()->routeIs('admin.orders*') ? 'active' : '' }}">
+                        <i class="fas fa-shopping-cart"></i> All Orders
+                    </a>
+                    <a href="{{ route('admin.payouts') }}" class="{{ request()->routeIs('admin.payouts*') ? 'active' : '' }}">
+                        <i class="fas fa-rupee-sign"></i> Seller Payouts
+                    </a>
+                
+                {{-- SELLER MENU --}}
+                @elseif(Auth::user()->isSeller())
                     <a href="{{ route('seller.dashboard') }}" class="{{ request()->routeIs('seller.dashboard') ? 'active' : '' }}">
                         <i class="fas fa-tachometer-alt"></i> Dashboard
                     </a>
                     <a href="{{ route('seller.orders') }}" class="{{ request()->routeIs('seller.orders*') ? 'active' : '' }}">
                         <i class="fas fa-box"></i> Orders
                         @php 
-                            // Count orders that contain seller's products (includes deleted products via order_items)
                             $sellerOrderCount = \App\Models\Order::whereHas('items', function($q) {
                                 $q->whereHas('product', function($subQ) {
                                     $subQ->where('seller_id', Auth::id())->withTrashed();
@@ -123,6 +146,8 @@
                     <a href="{{ route('products.create') }}">
                         <i class="fas fa-plus-circle"></i> Add Product
                     </a>
+                
+                {{-- NORMAL USER MENU --}}
                 @else
                     <a href="{{ route('dashboard') }}" class="{{ request()->routeIs('dashboard') ? 'active' : '' }}">
                         <i class="fas fa-tachometer-alt"></i> Dashboard
@@ -147,12 +172,15 @@
                         <i class="fas fa-map-marker-alt"></i> Addresses
                     </a>
                 @endif
+                
+                {{-- Profile Link (Common for all) --}}
                 <a href="{{ route('profile.edit') }}">
                     <i class="fas fa-user"></i> Profile
                 </a>
             </nav>
             
-            @if(!Auth::user()->isSeller())
+            {{-- BUDGET SIDEBAR - Only for Normal Users (NOT for Admin or Seller) --}}
+            @if(!Auth::user()->isSeller() && !Auth::user()->isAdmin())
                 @php 
                     $budget = Auth::user()->budget;
                     $monthlySpent = Auth::user()->orders()
@@ -185,6 +213,7 @@
                 @endif
             @endif
             
+            {{-- USER INFO SIDEBAR - Common for all --}}
             <div class="user-info-sidebar">
                 <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 1rem;">
                     <div style="width: 45px; height: 45px; border-radius: 50%; background: linear-gradient(135deg, #667eea, #764ba2); display: flex; align-items: center; justify-content: center; color: white; font-weight: bold; font-size: 1.2rem;">

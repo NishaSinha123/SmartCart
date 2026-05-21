@@ -7,6 +7,7 @@ use App\Http\Controllers\BudgetController;
 use App\Http\Controllers\GoogleLoginController;
 use App\Http\Controllers\OrderController;
 use App\Http\Controllers\AddressController;
+use App\Http\Controllers\Admin\AdminController;
 use Illuminate\Support\Facades\Route;
 use App\Models\Cart;
 use App\Models\CartItem;
@@ -126,8 +127,22 @@ Route::middleware(['auth', 'seller'])->prefix('seller')->group(function () {
 });
 
 // Admin Routes
-Route::middleware(['auth', 'admin'])->prefix('admin')->group(function () {
-    Route::get('/dashboard', function () { return view('admin.dashboard'); })->name('admin.dashboard');
+Route::middleware(['auth', 'admin'])->prefix('admin')->name('admin.')->group(function () {
+    Route::get('/', [AdminController::class, 'dashboard'])->name('dashboard');
+    Route::get('/users', [AdminController::class, 'users'])->name('users');
+    Route::get('/users/{user}', [AdminController::class, 'userShow'])->name('users.show');
+    Route::post('/users/{user}/block', [AdminController::class, 'userBlock'])->name('users.block');
+    Route::post('/users/{user}/unblock', [AdminController::class, 'userUnblock'])->name('users.unblock');
+    Route::delete('/users/{user}', [AdminController::class, 'userDelete'])->name('users.delete');
+    Route::post('/users/create', [AdminController::class, 'userCreate'])->name('users.create');
+    Route::get('/sellers', [AdminController::class, 'sellers'])->name('sellers');
+    Route::get('/payouts', [AdminController::class, 'sellerPayouts'])->name('payouts');
+    Route::get('/products', [AdminController::class, 'products'])->name('products');
+    Route::delete('/products/{id}/force-delete', [AdminController::class, 'productForceDelete'])->name('products.force-delete');
+    Route::post('/products/{id}/restore', [AdminController::class, 'productRestore'])->name('products.restore');
+    Route::get('/orders', [AdminController::class, 'orders'])->name('orders');
+    Route::get('/orders/{order}', [AdminController::class, 'orderShow'])->name('orders.show');
+    Route::post('/orders/{order}/update-status', [AdminController::class, 'orderUpdateStatus'])->name('orders.update-status');
 });
 
 // Auth routes (Breeze default)
